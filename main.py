@@ -11,6 +11,7 @@ import gc
 import os
 import sys
 import time
+import argparse
 
 import pandas as pd
 import psutil
@@ -47,9 +48,12 @@ def load_full_data():
     return transactions, customers, uint_to_hex_cust
 
 
-def generate_submission(recs, all_customers, uint_to_hex_cust, output_path='submission.csv'):
+def generate_submission(recs, all_customers, uint_to_hex_cust, output_dir='submissions', exp_name='recall'):
     """将召回结果转为 Kaggle 提交文件"""
-    print("\n📝 生成提交文件...", flush=True)
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f'submission_{exp_name}.csv')
+
+    print(f"\n📝 生成提交文件: {output_path}", flush=True)
     all_users = all_customers['customer_id'].unique()
     start = time.time()
 
@@ -73,9 +77,15 @@ def generate_submission(recs, all_customers, uint_to_hex_cust, output_path='subm
     return output_path
 
 
-def main():
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--exp_name', type=str, default='recall',
+                        help='Experiment name, used in output filename')
+    args = parser.parse_args()
+    exp_name = args.exp_name
+
     print("=" * 60)
-    print("🚀 全量跑批 — 多路召回")
+    print(f"🚀 全量跑批 — 多路召回 ({exp_name})")
     print("=" * 60)
 
     # 1. 加载数据
@@ -99,13 +109,10 @@ def main():
     gc.collect()
 
     # 3. 生成提交文件
-    generate_submission(final_recs, customers, uint_to_hex_cust)
+    generate_submission(final_recs, customers, uint_to_hex_cust, exp_name=exp_name)
 
     # 4. 统计
     total_items = sum(len(v) for v in final_recs.values())
-    print(f"\n📊 统计: {len(final_recs)} 用户, {total_items:,} 推荐商品")
-    print(f"🎉 完成！将 submission.csv 提交到 Kaggle。")
-
-
-if __name__ == "__main__":
-    main()
+    total_users = len(final_recs)
+    print(f"\n📊 统计: {total_users:,} 用户, {total_items:,} 推荐商品")
+    print(f"🎉 完成！将 submissions/submission_{exp_name}.csv 提交到 Kaggle。")

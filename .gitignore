@@ -3,15 +3,34 @@ data/
 offline_data/
 *.csv
 *.parquet
+*.pkl
+*.npy
+*.npz
 
-# Python
+# Model artifacts
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Experiment outputs
+outputs/
+logs/
+submissions/
+
+# Kaggle credentials
+kaggle.json
+.kaggle/
+
+# Python cache
 __pycache__/
 *.pyc
-*.pyo
+.ipynb_checkpoints/
 
-# Env
-.autodl/
+# System files
 .DS_Store
 .vscode/
 .idea/
 
+# Env
+.autodl/
