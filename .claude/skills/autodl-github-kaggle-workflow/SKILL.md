@@ -563,6 +563,110 @@ For outputs:
 scp -P PORT root@SERVER_IP:/root/autodl-tmp/H-M-rec/outputs/result.csv .
 ```
 
+## SSH-Based One-Click Auto Experiment (AutoDL)
+
+Use this workflow when the user wants Claude Code to SSH into an AutoDL instance,
+sync code, run the experiment, and shut down the instance — all in one shot.
+
+### Safety Rules for SSH
+
+1. Never echo, print, or log SSH passwords or private keys.
+2. Never commit SSH credentials to Git.
+3. Never leave SSH credentials in shell history or temp files.
+4. Use SSH key-based auth when possible; fall back to passwords only when necessary.
+5. After the experiment completes, the instance should be shut down to avoid billing.
+
+### Workflow
+
+Step 1 — User provides SSH connection info:
+
+```
+SSH command: ssh -p PORT root@SERVER_IP
+Password: ******
+```
+
+Claude Code should read this without echoing or logging the password.
+
+Step 2 — Claude Code connects to AutoDL, runs:
+
+```bash
+cd /root/autodl-tmp/H-M-rec
+pwd
+ls data/
+git status
+git pull origin main
+ls data/
+```
+
+Step 3 — Run the experiment:
+
+```bash
+cd /root/autodl-tmp/H-M-rec
+python main.py --exp_name experiment_name
+```
+
+The experiment may take 30-60 minutes. Claude Code should:
+
+- Use Bash tool with run_in_background (timeout 3600000ms) to run the experiment
+- Wait for completion
+- Check the output
+
+Step 4 — Verify the submission file:
+
+```bash
+ls -lh /root/autodl-tmp/H-M-rec/submissions/
+ls -lh /root/autodl-tmp/H-M-rec/submissions/submission_experiment_name.csv
+```
+
+If the user wants to download results, suggest AutoDL web file manager or scp.
+
+Step 5 — Shut down AutoDL instance:
+
+```bash
+sudo shutdown -h now
+```
+
+Or if sudo requires a password:
+
+```bash
+# Just report the completion and tell the user to stop the instance from AutoDL web console
+```
+
+### Estimated Runtime
+
+| Experiment | Data Size | Estimated Time |
+|---|---|---|
+| simple_validation.py | 1000 users | ~1 minute |
+| validation_5w.py | 50k users | ~5 minutes |
+| ablation_study.py | 50k users | ~10 minutes |
+| main.py (full recall) | 1.37M users | ~30-60 minutes |
+
+### Prompt Template
+
+When the user asks to run an experiment, use this prompt structure:
+
+```
+Use the autodl-github-kaggle-workflow skill.
+I want to SSH into AutoDL, pull latest code, and run the experiment.
+
+SSH: ssh -p PORT root@SERVER_IP
+Password: [handle securely]
+
+Steps:
+1. SSH and pull latest code (git pull)
+2. Run: python main.py --exp_name experiment_name
+3. Check output file exists
+4. Shut down instance
+```
+
+### What to Do After Experiment Completes
+
+1. Report the exit status (success / failure).
+2. If successful, report the output file path and size.
+3. If the user has kaggle API set up, ask if they want to submit.
+4. Suggest downloading the submission file via AutoDL web console or scp.
+5. Confirm shutdown.
+
 ## Common User Explanation
 
 If the user asks whether they should edit locally and run on AutoDL, explain:
