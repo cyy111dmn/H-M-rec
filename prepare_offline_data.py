@@ -12,7 +12,7 @@ import pandas as pd
 def main():
     np.random.seed(42)
 
-    data_dir = '/root/autodl-tmp/hm_recommender/hm_recommand/data'
+    data_dir = './data'
     output_dir = './offline_data'
     os.makedirs(output_dir, exist_ok=True)
 
