@@ -1,0 +1,17 @@
+# Data
+data/
+offline_data/
+*.csv
+*.parquet
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Env
+.autodl/
+.DS_Store
+.vscode/
+.idea/
+
