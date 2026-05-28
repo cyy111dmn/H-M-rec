@@ -28,18 +28,13 @@ def print_memory_usage(step):
 
 
 def load_full_data():
-    """加载全量 parquet 数据 + ID 映射"""
+    """加载全量 CSV 数据 + ID 映射"""
     print("📂 加载全量数据...", flush=True)
     data_dir = './data'
 
-    try:
-        transactions = pd.read_csv(f'{data_dir}/transactions_train.csv')
-        customers = pd.read_csv(f'{data_dir}/customers.csv')[['customer_id']]
-        print("✅ 使用 CSV 格式全量数据")
-    except FileNotFoundError:
-        print("⚠️ CSV 不存在，尝试 Parquet...")
-        transactions = pd.read_parquet(f'{data_dir}/transactions_train.parquet')
-        customers = pd.read_parquet(f'{data_dir}/customers.parquet')[['customer_id']]
+    # 全量数据只有 CSV 格式（3.3GB），parquet 是采样数据
+    transactions = pd.read_csv(f'{data_dir}/transactions_train.csv')
+    customers = pd.read_csv(f'{data_dir}/customers.csv')[['customer_id']]
 
     uint_to_hex_cust = load_id_mapping(data_dir)
 
