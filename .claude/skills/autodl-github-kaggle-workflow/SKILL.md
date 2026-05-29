@@ -481,70 +481,6 @@ Record:
 - submission message
 - conclusion
 
-## Full Daily Workflow
-
-The normal full workflow is:
-
-Local machine:
-
-```bash
-git status
-git add .
-git diff --cached --name-only
-git commit -m "add experiment_name"
-git push origin main
-```
-
-AutoDL:
-
-```bash
-cd /root/autodl-tmp/H-M-rec
-git status
-git pull origin main
-ls data/
-python main.py --exp_name experiment_name
-```
-
-Check generated submission:
-
-```bash
-ls -lh submissions/submission.csv
-head submissions/submission.csv
-```
-
-Validate format:
-
-```bash
-python - <<'PY'
-import pandas as pd
-
-path = "submissions/submission.csv"
-df = pd.read_csv(path)
-
-assert list(df.columns) == ["customer_id", "prediction"], "Columns must be customer_id,prediction"
-assert df["prediction"].notna().all(), "prediction contains NA"
-assert df["prediction"].apply(lambda x: len(str(x).split())).eq(12).all(), "Each prediction must contain exactly 12 items"
-
-print("submission format OK")
-PY
-```
-
-Submit:
-
-```bash
-kaggle competitions submit \
-  -c h-and-m-personalized-fashion-recommendations \
-  -f submissions/submission.csv \
-  -m "experiment_name commit=$(git rev-parse --short HEAD)"
-```
-
-Check submission:
-
-```bash
-kaggle competitions submissions \
-  -c h-and-m-personalized-fashion-recommendations
-```
-
 ## Result Download from AutoDL
 
 If the user wants to download result files from AutoDL, suggest AutoDL file manager or `scp`.
@@ -563,7 +499,7 @@ For outputs:
 scp -P PORT root@SERVER_IP:/root/autodl-tmp/H-M-rec/outputs/result.csv .
 ```
 
-## SSH-Based One-Click Auto Experiment (AutoDL)
+## SSH-Based One-Click Auto Experiment
 
 Use this workflow when the user wants Claude Code to SSH into an AutoDL instance,
 sync code, run the experiment, and shut down the instance — all in one shot.
@@ -576,7 +512,30 @@ sync code, run the experiment, and shut down the instance — all in one shot.
 4. Use SSH key-based auth when possible; fall back to passwords only when necessary.
 5. After the experiment completes, the instance should be shut down to avoid billing.
 
-### Workflow
+### Workflow Overview
+
+```
+┌─────────────┐    git push     ┌──────────┐    ssh + run    ┌───────────┐
+│  Local Dev   │ ──────────────> │  GitHub   │ ─────────────> │  AutoDL   │
+│  edit code   │                 │  repo     │                │  execute  │
+│  run quick   │                 │           │                │  full exp │
+│  validation  │ <────────────── │           │ <───────────── │  shutdown │
+└─────────────┘    download      └──────────┘   compressed    └───────────┘
+                   submission                     result
+```
+
+### Quick Local Validation (Before Pushing)
+
+Always run this first to catch errors before going to AutoDL:
+
+```bash
+cd /root/autodl-tmp/H-M-rec  # or local project path
+python simple_validation.py
+```
+
+This runs on 2000 sampled users (from offline_data parquet), does hot baseline + multi-recall, and finishes in ~30s. If it passes, the code is ready to push.
+
+### One-Click Experiment (SSH)
 
 Step 1 — User provides SSH connection info:
 
@@ -585,61 +544,48 @@ SSH command: ssh -p PORT root@SERVER_IP
 Password: ******
 ```
 
-Claude Code should read this without echoing or logging the password.
-
-Step 2 — Claude Code connects to AutoDL, runs:
+Step 2 — Claude Code SSH-es into AutoDL and executes:
 
 ```bash
+# Phase 1 — Pull latest code
 cd /root/autodl-tmp/H-M-rec
 pwd
-ls data/
 git status
 git pull origin main
 ls data/
-```
 
-Step 3 — Run the experiment:
-
-```bash
-cd /root/autodl-tmp/H-M-rec
+# Phase 2 — Run experiment
 python main.py --exp_name experiment_name
-```
 
-The experiment may take 30-60 minutes. Claude Code should:
-
-- Use Bash tool with run_in_background (timeout 3600000ms) to run the experiment
-- Wait for completion
-- Check the output
-
-Step 4 — Verify the submission file:
-
-```bash
+# Phase 3 — Verify submission
 ls -lh /root/autodl-tmp/H-M-rec/submissions/
-ls -lh /root/autodl-tmp/H-M-rec/submissions/submission_experiment_name.csv
-```
+head /root/autodl-tmp/H-M-rec/submissions/submission_*.csv
 
-If the user wants to download results, suggest AutoDL web file manager or scp.
+# Phase 4 — Compress submission for download
+tar czf /root/autodl-tmp/submission_$(git rev-parse --short HEAD).tar.gz \
+  -C /root/autodl-tmp/H-M-rec/submissions/ .
 
-Step 5 — Shut down AutoDL instance:
-
-```bash
+# Phase 5 — Auto shutdown
 sudo shutdown -h now
 ```
 
-Or if sudo requires a password:
-
-```bash
-# Just report the completion and tell the user to stop the instance from AutoDL web console
-```
-
-### Estimated Runtime
+### Estimated Runtime (on AutoDL with sufficient RAM)
 
 | Experiment | Data Size | Estimated Time |
 |---|---|---|
-| simple_validation.py | 1000 users | ~1 minute |
+| simple_validation.py | 2000 users | ~30 seconds |
 | validation_5w.py | 50k users | ~5 minutes |
 | ablation_study.py | 50k users | ~10 minutes |
-| main.py (full recall) | 1.37M users | ~30-60 minutes |
+| main.py (full 1.37M users) | full data | ~30-60 minutes |
+
+### What to Do After Experiment Completes
+
+1. Report the exit status (success / failure).
+2. If successful, report the output file path and size.
+3. Tell the user the compressed file location (e.g., `/root/autodl-tmp/submission_abc1234.tar.gz`).
+4. User downloads the compressed file via AutoDL web console.
+5. User extracts and submits to Kaggle manually.
+6. Confirm shutdown.
 
 ### Prompt Template
 
@@ -656,16 +602,45 @@ Steps:
 1. SSH and pull latest code (git pull)
 2. Run: python main.py --exp_name experiment_name
 3. Check output file exists
-4. Shut down instance
+4. Compress submission file
+5. Shut down instance
 ```
 
-### What to Do After Experiment Completes
+## Full Daily Workflow (Complete Pipeline)
 
-1. Report the exit status (success / failure).
-2. If successful, report the output file path and size.
-3. If the user has kaggle API set up, ask if they want to submit.
-4. Suggest downloading the submission file via AutoDL web console or scp.
-5. Confirm shutdown.
+### Phase 1 — Local: Edit + Validate
+
+```bash
+# 1. Edit code in IDE
+
+# 2. Quick local validation (2000 users, ~30s)
+python simple_validation.py
+
+# 3. Commit and push
+git status
+git add -A
+git diff --cached --name-only
+git commit -m "describe the experiment or fix"
+git push origin main
+```
+
+### Phase 2 — AutoDL: Pull + Run + Compress + Shutdown
+
+```bash
+cd /root/autodl-tmp/H-M-rec
+git pull origin main
+python main.py --exp_name experiment_name
+ls -lh submissions/
+tar czf /root/autodl-tmp/submission_$(git rev-parse --short HEAD).tar.gz -C submissions/ .
+sudo shutdown -h now
+```
+
+### Phase 3 — User: Download + Submit to Kaggle
+
+1. Go to AutoDL web console → File Manager
+2. Download `/root/autodl-tmp/submission_abc1234.tar.gz`
+3. Extract: `tar xzf submission_abc1234.tar.gz`
+4. Submit to Kaggle manually or via Kaggle API
 
 ## Common User Explanation
 
@@ -674,16 +649,14 @@ If the user asks whether they should edit locally and run on AutoDL, explain:
 Yes. The clean workflow is:
 
 1. Edit code locally.
-2. Commit and push to GitHub.
-3. Start AutoDL.
-4. Pull latest code on AutoDL.
-5. Run experiments using AutoDL local data.
-6. Generate `submission.csv`.
-7. Check submission format.
-8. Submit to Kaggle using Kaggle API.
-9. Record the local score, public LB score, commit hash, and conclusion.
+2. Run `simple_validation.py` for quick sanity check.
+3. Commit and push to GitHub.
+4. Give Claude Code the SSH info.
+5. Claude Code: SSH → pull → run → compress → shutdown.
+6. User downloads compressed submission from AutoDL web console.
+7. User submits to Kaggle manually.
 
-GitHub manages code. AutoDL manages large data and experiment outputs. Kaggle receives only verified submission files.
+GitHub manages code. AutoDL manages large data and experiment outputs. Claude Code automates the glue.
 
 ## What to Do When User Asks for Help
 
