@@ -366,26 +366,19 @@ class RecallManager:
 
 
 class PopularityRecall:
-    """热门商品召回，支持多周指数衰减加权。"""
+    """热门商品召回，使用最后一周的销售数据。"""
 
-    def __init__(self, train_trans: pd.DataFrame, top_n: int = 50, decay: float = 0.7):
+    def __init__(self, train_trans: pd.DataFrame, top_n: int = 50):
         self.train_trans = train_trans.copy()
         self.top_n = top_n
-        self.decay = decay
-        self.popular_items = self._get_popular_items_weighted()
+        self.popular_items = self._get_popular_items()
 
-    def _get_popular_items_weighted(self) -> List:
-        """多周指数衰减加权：score(item) = Σ exp(-decay × week_diff) × count_in_week"""
-        print("计算热门商品（多周指数加权）...", flush=True)
-        max_week = self.train_trans["week"].max()
-        sales = (
-            self.train_trans.groupby(["article_id", "week"]).size()
-            .reset_index(name="cnt")
-        )
-        sales["weight"] = np.exp(-self.decay * (max_week - sales["week"]))
-        sales["score"] = sales["cnt"] * sales["weight"]
-        item_scores = sales.groupby("article_id")["score"].sum().sort_values(ascending=False)
-        return item_scores.head(self.top_n).index.tolist()
+    def _get_popular_items(self) -> List:
+        print("计算热门商品...", flush=True)
+        last_week = self.train_trans["week"].min()
+        last_week_data = self.train_trans[self.train_trans["week"] == last_week]
+        item_sales = last_week_data.groupby("article_id").size().sort_values(ascending=False)
+        return item_sales.head(self.top_n).index.tolist()
 
     def recall(self, val_users: List[str]) -> Dict[str, List]:
         return {user_id: self.popular_items[:] for user_id in val_users}
@@ -478,16 +471,15 @@ class ItemCFRecallSparse:
         co_occur_matrix.setdiag(0)
         co_occur_matrix.eliminate_zeros()
 
-        print("计算余弦相似度（热门商品降权）...", flush=True)
+        print("计算 Jaccard 相似度...", flush=True)
         coo = co_occur_matrix.tocoo()
         item_user_counts = np.asarray(self.user_item_binary.sum(axis=0)).ravel()
-        # 余弦：co_occur(i,j) / sqrt(count(i) * count(j))
-        denom = np.sqrt(item_user_counts[coo.row] * item_user_counts[coo.col]).astype(np.float32)
+        denom = item_user_counts[coo.row] + item_user_counts[coo.col] - coo.data
         sim_data = np.divide(
-            coo.data.astype(np.float32),
+            coo.data,
             denom,
             out=np.zeros_like(coo.data, dtype=np.float32),
-            where=denom > 1e-8
+            where=denom > 0
         )
 
         self.similarity_matrix = csr_matrix(
