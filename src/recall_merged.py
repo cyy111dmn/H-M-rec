@@ -269,6 +269,109 @@ class RecallManager:
 
         return final_recs, source_info
 
+    def _build_all_user_source_info(
+        self,
+        popularity_recs: Dict[str, List],
+        repurchase_recs: Dict[str, List],
+        itemcf_recs: Dict[str, List],
+    ) -> Dict[str, Dict]:
+        """为所有用户构建 source_info（一次，供网格搜索复用）。"""
+        all_info = {}
+        for user_id in tqdm(self.val_users, desc="构建来源信息", unit="用户"):
+            all_info[user_id] = self._build_user_source_info(
+                user_id=user_id,
+                popularity_recs=popularity_recs,
+                repurchase_recs=repurchase_recs,
+                itemcf_recs=itemcf_recs,
+            )
+        return all_info
+
+    def _rerank_with_weights(
+        self,
+        all_user_source_info: Dict[str, Dict],
+        *,
+        repurchase_weight: float | None = None,
+        itemcf_weight: float | None = None,
+        popularity_weight: float | None = None,
+        repurchase_rank_weight: float | None = None,
+        itemcf_rank_weight: float | None = None,
+        popularity_rank_weight: float | None = None,
+    ) -> Dict[str, List]:
+        """在已构建的 source_info 上换权重重新排序（不重新跑召回）。"""
+        # 暂存旧权重
+        old = {
+            "repurchase_weight": self.repurchase_weight,
+            "itemcf_weight": self.itemcf_weight,
+            "popularity_weight": self.popularity_weight,
+            "repurchase_rank_weight": self.repurchase_rank_weight,
+            "itemcf_rank_weight": self.itemcf_rank_weight,
+            "popularity_rank_weight": self.popularity_rank_weight,
+        }
+        # 设置新权重
+        if repurchase_weight is not None:
+            self.repurchase_weight = repurchase_weight
+        if itemcf_weight is not None:
+            self.itemcf_weight = itemcf_weight
+        if popularity_weight is not None:
+            self.popularity_weight = popularity_weight
+        if repurchase_rank_weight is not None:
+            self.repurchase_rank_weight = repurchase_rank_weight
+        if itemcf_rank_weight is not None:
+            self.itemcf_rank_weight = itemcf_rank_weight
+        if popularity_rank_weight is not None:
+            self.popularity_rank_weight = popularity_rank_weight
+
+        # 重排
+        final_recs = {}
+        for user_id in tqdm(self.val_users, desc="换权重重排", unit="用户"):
+            final_recs[user_id] = self._rank_candidates_by_fusion(all_user_source_info[user_id])
+
+        # 恢复旧权重
+        for k, v in old.items():
+            setattr(self, k, v)
+
+        return final_recs
+
+    def grid_search_weights(
+        self,
+        val_truth_dict: Dict[str, List],
+        weight_grid: List[Dict],
+        k: int = 12,
+    ) -> List[Dict]:
+        """网格搜索融合权重。
+
+        对同一批候选集（跑一次召回），尝试不同权重组合，返回各组合的 MAP@k。
+
+        weight_grid: [{"repurchase_weight": 3.0, "itemcf_weight": 1.5, ...}, ...]
+        只传要改的权重即可，未传的保持当前值。
+        """
+        from src.metrics import calculate_map_at_k
+
+        # Step 1: 跑一次召回
+        print("\n📡 跑一次召回获取候选集...", flush=True)
+        popularity_recs = self.popularity_recaller.recall_with_ranks(self.val_users)
+        repurchase_recs = self.repurchase_recaller.recall_with_ranks(self.val_users)
+        itemcf_recs = self.itemcf_recaller.recall_with_ranks(self.val_users)
+
+        # Step 2: 构建 source_info（一次，最重的一步）
+        print("\n📦 构建来源信息（一次，供后续复用）...", flush=True)
+        all_user_source_info = self._build_all_user_source_info(
+            popularity_recs, repurchase_recs, itemcf_recs
+        )
+
+        # Step 3: 对每个权重组合重新排序 + 评估
+        results = []
+        for i, weights in enumerate(weight_grid):
+            print(f"\n[{i+1}/{len(weight_grid)}] 权重: {weights}", flush=True)
+            final_recs = self._rerank_with_weights(all_user_source_info, **weights)
+            map_score = calculate_map_at_k(val_truth_dict, final_recs, k=k)
+            print(f"   MAP@{k} = {map_score:.6f}", flush=True)
+            results.append({**weights, "map_at_k": map_score})
+
+        # 恢复原始权重
+        print("\n✅ 网格搜索完成", flush=True)
+        return results
+
 
 class PopularityRecall:
     def __init__(self, train_trans: pd.DataFrame, top_n: int = 50):

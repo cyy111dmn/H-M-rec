@@ -562,5 +562,107 @@ def main():
     print("\n✅ 结果已保存到 ablation_results.csv", flush=True)
 
 
+# =========================
+# 网格搜索入口
+# =========================
+
+def generate_weight_grid() -> List[Dict]:
+    """生成融合权重网格（3 个来源权重 + 3 个 rank 权重）。"""
+    repurchase_weights = [2.0, 2.5, 3.0, 3.5, 4.0, 5.0]
+    itemcf_weights = [1.0, 1.5, 2.0, 2.5, 3.0]
+    popularity_weights = [0.5, 0.8, 1.0, 1.5]
+
+    # rank 权重保持当前值，先只调 source 权重
+    grid = []
+    for rw in repurchase_weights:
+        for iw in itemcf_weights:
+            for pw in popularity_weights:
+                grid.append({
+                    "repurchase_weight": rw,
+                    "itemcf_weight": iw,
+                    "popularity_weight": pw,
+                })
+    return grid
+
+
+def run_grid_search():
+    """加载 5w 数据 → 跑一次召回 → 网格搜索最佳融合权重。"""
+    print("=" * 70)
+    print("🚀 融合权重网格搜索")
+    print("=" * 70)
+
+    train_trans, val_customers, val_ground_truth, _, _ = load_local_data()
+
+    all_users = val_customers["customer_id"].astype(str).to_numpy(copy=True)
+    np.random.seed(42)
+    np.random.shuffle(all_users)
+    split_idx = int(len(all_users) * 0.8)
+    valid_users = set(all_users[split_idx:])
+    valid_users_df = val_customers[val_customers["customer_id"].isin(valid_users)].copy()
+    valid_truth_df = val_ground_truth[val_ground_truth["customer_id"].isin(valid_users)].copy()
+    valid_truth_dict = {
+        str(k): normalize_listlike(v)
+        for k, v in zip(valid_truth_df["customer_id"], valid_truth_df["purchased_articles"])
+    }
+    print(f"👥 验证用户: {len(valid_users)}", flush=True)
+
+    # 创建 RecallManager（用默认权重，只做召回）
+    mgr = RecallManager(
+        train_trans=train_trans,
+        val_customers=valid_users_df,
+        top_n=TOP_N,
+        itemcf_top_k=ITEMCF_TOP_K,
+        max_items=MAX_ITEMS,
+        recall_cutoff=RECALL_CUTOFF,
+    )
+
+    # 生成网格 + 搜索
+    grid = generate_weight_grid()
+    print(f"📋 网格大小: {len(grid)} 组", flush=True)
+
+    results = mgr.grid_search_weights(valid_truth_dict, grid, k=12)
+
+    # 排序找最优
+    results_df = pd.DataFrame(results)
+    results_df = results_df.sort_values("map_at_k", ascending=False).reset_index(drop=True)
+
+    print("\n" + "★" * 70)
+    print("🏆 网格搜索 Top-10 权重组合")
+    print("★" * 70)
+    print(results_df.head(10).to_string(index=False))
+
+    best = results_df.iloc[0]
+    print(f"\n🥇 最佳权重: repurchase={best['repurchase_weight']:.1f}, "
+          f"itemcf={best['itemcf_weight']:.1f}, popularity={best['popularity_weight']:.1f}")
+    print(f"   MAP@12 = {best['map_at_k']:.6f}")
+
+    # 与默认权重对比
+    default_row = results_df[
+        (results_df["repurchase_weight"] == 3.0) &
+        (results_df["itemcf_weight"] == 1.5) &
+        (results_df["popularity_weight"] == 0.8)
+    ]
+    if len(default_row) > 0:
+        default_map = default_row.iloc[0]["map_at_k"]
+        improvement = (best["map_at_k"] - default_map) / (default_map + 1e-9) * 100
+        print(f"\n📊 默认权重 (3.0/1.5/0.8) MAP@12 = {default_map:.6f}")
+        print(f"📈 最佳权重相对提升: {improvement:+.2f}%")
+
+    # 保存结果
+    results_df.to_csv("grid_search_weights.csv", index=False)
+    print("\n✅ 结果已保存到 grid_search_weights.csv", flush=True)
+
+    # 输出可直接复制到代码的参数字符串
+    print(f"\n📝 复制到 recall_merged.py RecallManager.__init__ 默认参数:")
+    print(f"    repurchase_weight={best['repurchase_weight']}, "
+          f"itemcf_weight={best['itemcf_weight']}, "
+          f"popularity_weight={best['popularity_weight']},")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if "--grid-search" in sys.argv:
+        run_grid_search()
+    else:
+        main()
