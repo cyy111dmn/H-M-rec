@@ -155,7 +155,63 @@ def build_ranking_candidates(recs, source_info, customers, transactions=None, sa
     return pd.DataFrame(samples)
 
 
-def lgbm_rerank(ranker, candidates_df):
+def batch_predict_with_ranker(ranker, final_recs, source_info, customers, transactions, articles,
+                              batch_size=50000):
+    """分批预测：每次取 batch_size 个用户，构建候选→特征→预测→收集 Top-12，避免内存爆。"""
+    print("🔮 LGBM 分批全量推理...", flush=True)
+
+    all_users = customers['customer_id'].unique()
+    str_source_info = {str(u): {str(i): v for i, v in items.items()} for u, items in source_info.items()}
+    ranked_recs = {}
+
+    for start in range(0, len(all_users), batch_size):
+        batch = all_users[start:start + batch_size]
+        print(f"  批次 {start // batch_size + 1}/{(len(all_users) + batch_size - 1) // batch_size}: "
+              f"用户 {start:,} - {min(start + batch_size, len(all_users)):,}", flush=True)
+
+        samples = []
+        for uid in batch:
+            safe_u = str(uid)
+            if safe_u not in final_recs:
+                continue
+            user_source = str_source_info.get(safe_u, {})
+            for item_id in final_recs[safe_u]:
+                src = user_source.get(str(item_id), {})
+                samples.append({
+                    "customer_id": uid, "article_id": item_id, "purchased": 0,
+                    "is_from_repurchase": src.get("is_from_repurchase", 0),
+                    "is_from_itemcf": src.get("is_from_itemcf", 0),
+                    "is_from_popularity": src.get("is_from_popularity", 0),
+                    "repurchase_rank": src.get("repurchase_rank", 999),
+                    "itemcf_rank": src.get("itemcf_rank", 999),
+                })
+
+        batch_df = pd.DataFrame(samples)
+        batch_df = extract_advanced_features_for_twostage(batch_df, transactions, customers, articles)
+
+        preds = ranker.predict(batch_df[RANKER_FEATURE_COLS])
+        batch_df["score"] = preds
+
+        top12 = (
+            batch_df[["customer_id", "article_id", "score"]]
+            .sort_values(["customer_id", "score"], ascending=[True, False])
+            .groupby("customer_id")
+            .head(12)
+        )
+        for uid, items in top12.groupby("customer_id")["article_id"].apply(list).items():
+            ranked_recs[uid] = items
+
+        del batch_df, samples, batch, preds, top12
+        gc.collect()
+
+    # 兜底：没有预测结果的用户给全局热门
+    popular_items = list(final_recs[list(final_recs.keys())[0]][:12]) if final_recs else []
+    for uid in all_users:
+        safe_u = str(uid)
+        if safe_u not in ranked_recs:
+            ranked_recs[safe_u] = []
+
+    return ranked_recs
     """用 LGBM 对候选集重排，返回每个用户 Top-12。"""
     print("🔮 LGBM 全量推理...", flush=True)
     batch_size = 500000
@@ -293,16 +349,9 @@ if __name__ == "__main__":
         del train_df
         gc.collect()
 
-        # 构建全量候选集 + 预测
-        candidates_df = build_ranking_candidates(final_recs, source_info, customers)
-        print(f"候选集: {len(candidates_df):,} 行", flush=True)
-        candidates_df = extract_advanced_features_for_twostage(candidates_df, transactions, customers, articles)
-        del transactions
-        gc.collect()
-        print_memory_usage("候选集特征提取完成")
-
-        ranked_recs = lgbm_rerank(ranker, candidates_df)
-        del candidates_df, ranker
+        # 分批全量预测（避免一次性 1.37 亿行爆内存）
+        ranked_recs = batch_predict_with_ranker(ranker, final_recs, source_info, customers, transactions, articles)
+        del ranker
         gc.collect()
         generate_submission(ranked_recs, customers, uint_to_hex_cust, exp_name=exp_name)
 
