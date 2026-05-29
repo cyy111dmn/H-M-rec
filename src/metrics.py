@@ -1,33 +1,15 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Union
 
+from src.utils import normalize_listlike
+
 
 def _normalize_items(x):
-    """
-    把真实标签/预测标签统一转成 Python list，兼容：
-    - list
-    - tuple
-    - set
-    - numpy.ndarray
-    - pandas Series
-    - NaN / None
-    """
-    if x is None:
-        return []
-    if isinstance(x, float) and pd.isna(x):
-        return []
-    if isinstance(x, list):
-        return x
-    if isinstance(x, tuple):
-        return list(x)
-    if isinstance(x, set):
-        return list(x)
-    if isinstance(x, np.ndarray):
-        return x.tolist()
-    if isinstance(x, pd.Series):
-        return x.tolist()
-    return [x]
+    """统一转成 list（委托 utils.normalize_listlike，保留此函数兼容旧调用）。"""
+    return normalize_listlike(x)
 
 
 def calculate_ap_at_k(actual: List[int], predicted: List[int], k: int = 12) -> float:

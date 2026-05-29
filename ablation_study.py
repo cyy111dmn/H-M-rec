@@ -24,7 +24,6 @@ from typing import Dict, List, Tuple, Any
 
 import numpy as np
 import pandas as pd
-import psutil
 from tqdm import tqdm
 
 sys.path.append("src")
@@ -33,6 +32,7 @@ from src.features import extract_advanced_features_for_twostage
 from src.metrics import calculate_map_at_k
 from src.ranker import train_lgbm_ranker
 from src.recall_merged import RecallManager
+from src.utils import print_memory_usage, reduce_mem_usage, normalize_listlike
 
 
 # =========================
@@ -75,62 +75,9 @@ PREFERENCE_MATCH_FEATURES = ["is_category_matched", "is_color_matched"]
 
 
 # =========================
-# 工具函数
+# 工具函数（委托 utils）
 # =========================
-def print_memory_usage(step: str):
-    mem = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    print(f"[内存监控] {step}: {mem:.2f} MB", flush=True)
-
-
-def reduce_mem_usage(df: pd.DataFrame, verbose: bool = True) -> pd.DataFrame:
-    numerics = ["int16", "int32", "int64", "float16", "float32", "float64"]
-    start_mem = df.memory_usage().sum() / 1024**2
-
-    for col in df.columns:
-        col_type = df[col].dtypes
-        if col_type in numerics:
-            c_min = df[col].min()
-            c_max = df[col].max()
-
-            if str(col_type).startswith("int"):
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)
-                else:
-                    df[col] = df[col].astype(np.int64)
-            else:
-                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
-                    df[col] = df[col].astype(np.float16)
-                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
-                    df[col] = df[col].astype(np.float32)
-                else:
-                    df[col] = df[col].astype(np.float64)
-
-    end_mem = df.memory_usage().sum() / 1024**2
-    if verbose:
-        print(f"内存压缩: {start_mem:.2f} MB -> {end_mem:.2f} MB", flush=True)
-    return df
-
-
-def normalize_listlike(x: Any) -> List:
-    if x is None:
-        return []
-    if isinstance(x, float) and pd.isna(x):
-        return []
-    if isinstance(x, list):
-        return x
-    if isinstance(x, tuple):
-        return list(x)
-    if isinstance(x, set):
-        return list(x)
-    if isinstance(x, np.ndarray):
-        return x.tolist()
-    if isinstance(x, pd.Series):
-        return x.tolist()
-    return [x]
+# print_memory_usage, reduce_mem_usage, normalize_listlike 已迁移到 src.utils
 
 
 def load_local_data():

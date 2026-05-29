@@ -14,17 +14,12 @@ import time
 import argparse
 
 import pandas as pd
-import psutil
 
 sys.path.append('src')
 
 from src.data_loader import load_id_mapping
 from src.recall_merged import RecallManager
-
-
-def print_memory_usage(step):
-    mem = psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024
-    print(f"[内存监控] {step}: {mem:.2f} MB", flush=True)
+from src.utils import print_memory_usage
 
 
 def load_full_data():
