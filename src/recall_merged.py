@@ -36,7 +36,7 @@ class RecallManager:
         recall_cutoff: int = 50,
         recent_weeks: int = 27,
         # ===== 新增：融合权重 =====
-        repurchase_weight: float = 3.0,
+        repurchase_weight: float = 2.0,
         itemcf_weight: float = 1.5,
         popularity_weight: float = 0.8,
         repurchase_rank_weight: float = 1.0,
