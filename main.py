@@ -115,14 +115,13 @@ def generate_submission(recs, all_customers, uint_to_hex_cust, output_dir='submi
 
 
 def _build_source_for(recs, source_info, user_ids):
-    """只构建指定用户的 str_source_info，避免全量 137 万用户 OOM。"""
+    """只构建指定用户的 str_source_info，只遍历需要的用户，不遍历全量 source_info。"""
     str_src = {}
-    user_set = set(str(u) for u in user_ids)
-    for u, items in source_info.items():
-        su = str(u)
-        if su not in user_set:
-            continue
-        str_src[su] = {str(i): v for i, v in items.items()}
+    for uid in user_ids:
+        su = str(uid)
+        src = source_info.get(su, source_info.get(uid, {}))
+        if src:
+            str_src[su] = {str(i): v for i, v in src.items()}
     return str_src
 
 
