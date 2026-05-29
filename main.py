@@ -114,10 +114,30 @@ def generate_submission(recs, all_customers, uint_to_hex_cust, output_dir='submi
     return output_path
 
 
+def _build_source_for(recs, source_info, user_ids):
+    """只构建指定用户的 str_source_info，避免全量 137 万用户 OOM。"""
+    str_src = {}
+    user_set = set(str(u) for u in user_ids)
+    for u, items in source_info.items():
+        su = str(u)
+        if su not in user_set:
+            continue
+        str_src[su] = {str(i): v for i, v in items.items()}
+    return str_src
+
+
 def build_ranking_candidates(recs, source_info, customers, transactions=None, sample_users=None):
     """从召回结果构建候选 DataFrame，可附带标签。"""
     print("📋 构建排序候选集...", flush=True)
 
+    all_users = customers['customer_id'].unique()
+    if sample_users is not None:
+        all_users = np.random.RandomState(42).choice(all_users, min(sample_users, len(all_users)), replace=False)
+
+    # 只构建需要的用户的 source_info
+    str_source_info = _build_source_for(recs, source_info, all_users)
+
+    # 只在训练时需要 purchase_set
     purchase_set = None
     if transactions is not None:
         purchase_set = set(zip(
@@ -125,13 +145,7 @@ def build_ranking_candidates(recs, source_info, customers, transactions=None, sa
             transactions['article_id'].astype(str)
         ))
 
-    all_users = customers['customer_id'].unique()
-    if sample_users is not None:
-        all_users = np.random.RandomState(42).choice(all_users, min(sample_users, len(all_users)), replace=False)
-
-    str_source_info = {str(u): {str(i): v for i, v in items.items()} for u, items in source_info.items()}
     samples = []
-
     for uid in all_users:
         safe_u = str(uid)
         if safe_u not in recs:
@@ -161,7 +175,6 @@ def batch_predict_with_ranker(ranker, final_recs, source_info, customers, transa
     print("🔮 LGBM 分批全量推理...", flush=True)
 
     all_users = customers['customer_id'].unique()
-    str_source_info = {str(u): {str(i): v for i, v in items.items()} for u, items in source_info.items()}
     ranked_recs = {}
 
     for start in range(0, len(all_users), batch_size):
@@ -169,12 +182,15 @@ def batch_predict_with_ranker(ranker, final_recs, source_info, customers, transa
         print(f"  批次 {start // batch_size + 1}/{(len(all_users) + batch_size - 1) // batch_size}: "
               f"用户 {start:,} - {min(start + batch_size, len(all_users)):,}", flush=True)
 
+        # 只构建当前批次用户的 source_info
+        batch_source = _build_source_for(final_recs, source_info, batch)
+
         samples = []
         for uid in batch:
             safe_u = str(uid)
             if safe_u not in final_recs:
                 continue
-            user_source = str_source_info.get(safe_u, {})
+            user_source = batch_source.get(safe_u, {})
             for item_id in final_recs[safe_u]:
                 src = user_source.get(str(item_id), {})
                 samples.append({
@@ -204,30 +220,12 @@ def batch_predict_with_ranker(ranker, final_recs, source_info, customers, transa
         del batch_df, samples, batch, preds, top12
         gc.collect()
 
-    # 兜底：没有预测结果的用户给全局热门
-    popular_items = list(final_recs[list(final_recs.keys())[0]][:12]) if final_recs else []
     for uid in all_users:
         safe_u = str(uid)
         if safe_u not in ranked_recs:
             ranked_recs[safe_u] = []
 
     return ranked_recs
-    """用 LGBM 对候选集重排，返回每个用户 Top-12。"""
-    print("🔮 LGBM 全量推理...", flush=True)
-    batch_size = 500000
-    preds = []
-    for i in range(0, len(candidates_df), batch_size):
-        preds.append(ranker.predict(candidates_df[RANKER_FEATURE_COLS].iloc[i:i + batch_size]))
-    candidates_df = candidates_df.copy()
-    candidates_df["score"] = np.concatenate(preds)
-
-    top12 = (
-        candidates_df[["customer_id", "article_id", "score"]]
-        .sort_values(["customer_id", "score"], ascending=[True, False])
-        .groupby("customer_id")
-        .head(12)
-    )
-    return top12.groupby("customer_id")["article_id"].apply(list).to_dict()
 
 
 def load_deepfm_model(model_path, device):
