@@ -37,6 +37,9 @@ NUM_FEATURES = [
     "repurchase_rank", "itemcf_rank",
     "is_category_matched", "is_color_matched",
     "item_price", "user_avg_price", "price_diff", "item_age_weeks",
+    "user_price_p50", "user_price_p10", "user_price_p90",
+    "user_activity_log",
+    "is_new_repurchase",
     "age",
 ]
 

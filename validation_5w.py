@@ -180,6 +180,9 @@ def run_lgbm_ranking_experiment(
         'repurchase_rank', 'itemcf_rank',
         'is_category_matched', 'is_color_matched',
         'item_price', 'user_avg_price', 'price_diff', 'item_age_weeks',
+        'user_price_p50', 'user_price_p10', 'user_price_p90',
+        'user_activity_log', 'user_activity_bucket',
+        'is_new_repurchase',
         'age', 'club_member_status', 'fashion_news_frequency',
         'product_group_name', 'index_group_name', 'colour_group_name', 'graphical_appearance_name'
     ]
@@ -187,7 +190,8 @@ def run_lgbm_ranking_experiment(
     cat_columns = [
         'club_member_status', 'fashion_news_frequency',
         'product_group_name', 'index_group_name',
-        'colour_group_name', 'graphical_appearance_name'
+        'colour_group_name', 'graphical_appearance_name',
+        'user_activity_bucket',
     ]
 
     print("🚀 训练 LGBM 模型...", flush=True)

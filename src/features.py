@@ -80,6 +80,12 @@ def extract_advanced_features_for_twostage(train_df, train_trans, customers, art
     user_activity = train_trans['customer_id'].value_counts().to_dict()
     train_df['user_activity'] = train_df['customer_id'].map(user_activity).fillna(0).astype(np.float32)
 
+    train_df['user_activity_log'] = np.log1p(train_df['user_activity']).astype(np.float32)
+    train_df['user_activity_bucket'] = pd.qcut(
+        train_df['user_activity'].rank(method='first'),
+        q=5, labels=False, duplicates='drop'
+    ).astype(np.int8)
+
     print("🔄 [特征工程] 计算历史复购特征 (极速省内存版)...", flush=True)
     historical_pairs = set(zip(train_trans['customer_id'], train_trans['article_id']))
     train_df['is_repurchase'] = [
@@ -88,17 +94,24 @@ def extract_advanced_features_for_twostage(train_df, train_trans, customers, art
     ]
     train_df['is_repurchase'] = train_df['is_repurchase'].astype(np.int8)
 
-    print("💰 [特征工程] 计算价格敏感度匹配...", flush=True)
+    print("💰 [特征工程] 计算价格敏感度匹配（含分位数）...", flush=True)
     if 'price' in train_trans.columns:
         item_avg_price = train_trans.groupby('article_id')['price'].mean().to_dict()
-        user_avg_price = train_trans.groupby('customer_id')['price'].mean().to_dict()
-
         train_df['item_price'] = train_df['article_id'].map(item_avg_price).fillna(0).astype(np.float32)
-        train_df['user_avg_price'] = train_df['customer_id'].map(user_avg_price).fillna(0).astype(np.float32)
+
+        user_price_stats = train_trans.groupby('customer_id')['price'].agg(['mean', 'median', lambda x: x.quantile(0.1), lambda x: x.quantile(0.9)]).to_dict('index')
+        train_df['user_avg_price'] = train_df['customer_id'].map(lambda u: user_price_stats.get(u, {}).get('mean', 0)).astype(np.float32)
+        train_df['user_price_p50'] = train_df['customer_id'].map(lambda u: user_price_stats.get(u, {}).get('median', 0)).astype(np.float32)
+        train_df['user_price_p10'] = train_df['customer_id'].map(lambda u: user_price_stats.get(u, {}).get('<lambda_0>', 0)).astype(np.float32)
+        train_df['user_price_p90'] = train_df['customer_id'].map(lambda u: user_price_stats.get(u, {}).get('<lambda_1>', 0)).astype(np.float32)
+
         train_df['price_diff'] = np.abs(train_df['user_avg_price'] - train_df['item_price']).astype(np.float32)
     else:
         train_df['item_price'] = 0.0
         train_df['user_avg_price'] = 0.0
+        train_df['user_price_p50'] = 0.0
+        train_df['user_price_p10'] = 0.0
+        train_df['user_price_p90'] = 0.0
         train_df['price_diff'] = 0.0
 
     print("⏳ [特征工程] 计算商品生命周期 (Item Age)...", flush=True)
@@ -116,6 +129,12 @@ def extract_advanced_features_for_twostage(train_df, train_trans, customers, art
         train_df.drop(columns=['item_first_week'], inplace=True)
     else:
         train_df['item_age_weeks'] = 0
+
+    print("🆕 [特征工程] 计算新品+复购交叉特征...", flush=True)
+    NEW_ITEM_THRESHOLD = 4  # 最近 4 周内上架算"新品"
+    train_df['is_new_repurchase'] = (
+        (train_df['item_age_weeks'] < NEW_ITEM_THRESHOLD) & (train_df['is_repurchase'] == 1)
+    ).astype(np.int8)
 
     print("👤 [特征工程] 拼接画像与偏好交叉特征...", flush=True)
     hist_df = train_trans[['customer_id', 'article_id']].merge(
