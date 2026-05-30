@@ -124,6 +124,17 @@ def build_ranking_candidates(recs, source_info, customers):
     return pd.DataFrame(samples)
 
 
+def _build_source_for(recs, source_info, user_ids):
+    """只构建指定用户的 str_source_info，只遍历需要的用户。"""
+    str_src = {}
+    for uid in user_ids:
+        su = str(uid)
+        src = source_info.get(su, source_info.get(uid, {}))
+        if src:
+            str_src[su] = {str(i): v for i, v in src.items()}
+    return str_src
+
+
 def _build_ranking_candidates_with_labels(recs, source_info, customers, label_set, sample_users=100000):
     """从召回结果构建带时间切分标签的训练集。"""
     print("📋 构建排序候选集（带时间切分标签）...", flush=True)
