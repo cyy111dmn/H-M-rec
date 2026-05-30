@@ -32,6 +32,7 @@ class RecallManager:
         top_n: int = 50,
         itemcf_top_k: int = 20,
         usercf_top_k: int = 20,
+        w2v_top_k: int = 20,
         use_sparse_matrix: bool = True,
         max_items: int | None = None,
         recall_cutoff: int = 50,
@@ -40,10 +41,12 @@ class RecallManager:
         repurchase_weight: float = 2.0,
         itemcf_weight: float = 1.5,
         usercf_weight: float = 1.0,
+        w2v_weight: float = 0.8,
         popularity_weight: float = 0.8,
         repurchase_rank_weight: float = 1.0,
         itemcf_rank_weight: float = 0.5,
         usercf_rank_weight: float = 0.3,
+        w2v_rank_weight: float = 0.2,
         popularity_rank_weight: float = 0.2,
     ):
         if not isinstance(use_sparse_matrix, bool):
@@ -58,6 +61,7 @@ class RecallManager:
         self.top_n = int(top_n)
         self.itemcf_top_k = int(itemcf_top_k)
         self.usercf_top_k = int(usercf_top_k)
+        self.w2v_top_k = int(w2v_top_k)
         self.use_sparse_matrix = use_sparse_matrix
         self.max_items = max_items
         self.recall_cutoff = int(recall_cutoff)
@@ -67,10 +71,12 @@ class RecallManager:
         self.repurchase_weight = float(repurchase_weight)
         self.itemcf_weight = float(itemcf_weight)
         self.usercf_weight = float(usercf_weight)
+        self.w2v_weight = float(w2v_weight)
         self.popularity_weight = float(popularity_weight)
         self.repurchase_rank_weight = float(repurchase_rank_weight)
         self.itemcf_rank_weight = float(itemcf_rank_weight)
         self.usercf_rank_weight = float(usercf_rank_weight)
+        self.w2v_rank_weight = float(w2v_rank_weight)
         self.popularity_rank_weight = float(popularity_rank_weight)
 
         self._preprocess_data()
@@ -78,6 +84,7 @@ class RecallManager:
         self.popularity_recaller = PopularityRecall(self.train_trans, self.top_n)
         self.repurchase_recaller = RepurchaseRecall(self.train_trans)
         self.usercf_recaller = UserCFRecall(self.train_trans, self.usercf_top_k)
+        self.w2v_recaller = Word2VecRecall(self.train_trans, self.w2v_top_k)
         if self.use_sparse_matrix:
             self.itemcf_recaller = ItemCFRecallSparse(self.train_trans, self.itemcf_top_k)
         else:
@@ -111,7 +118,8 @@ class RecallManager:
         repurchase_recs = self.repurchase_recaller.recall(self.val_users)
         itemcf_recs = self.itemcf_recaller.recall(self.val_users)
         usercf_recs = self.usercf_recaller.recall(self.val_users)
-        final_recs = self._merge_recall_results(popularity_recs, repurchase_recs, itemcf_recs, usercf_recs)
+        w2v_recs = self.w2v_recaller.recall(self.val_users)
+        final_recs = self._merge_recall_results(popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs)
         print_memory_usage("多路召回完成")
         return final_recs
 
@@ -121,8 +129,9 @@ class RecallManager:
         repurchase_recs = self.repurchase_recaller.recall_with_ranks(self.val_users)
         itemcf_recs = self.itemcf_recaller.recall_with_ranks(self.val_users)
         usercf_recs = self.usercf_recaller.recall_with_ranks(self.val_users)
+        w2v_recs = self.w2v_recaller.recall_with_ranks(self.val_users)
         final_recs, source_info = self._merge_recall_results_with_source(
-            popularity_recs, repurchase_recs, itemcf_recs, usercf_recs
+            popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs
         )
         print_memory_usage("多路召回完成")
         return final_recs, source_info
@@ -147,6 +156,10 @@ class RecallManager:
             score += self.usercf_weight
             score += self.usercf_rank_weight * self._safe_inv_rank(info.get("usercf_rank"))
 
+        if info.get("is_from_w2v", 0) == 1:
+            score += self.w2v_weight
+            score += self.w2v_rank_weight * self._safe_inv_rank(info.get("w2v_rank"))
+
         if info.get("is_from_popularity", 0) == 1:
             score += self.popularity_weight
             score += self.popularity_rank_weight * self._safe_inv_rank(info.get("popularity_rank"))
@@ -156,9 +169,11 @@ class RecallManager:
     def _init_source_entry(self, item) -> Dict:
         return {
             "is_from_repurchase": 0, "is_from_itemcf": 0,
-            "is_from_usercf": 0, "is_from_popularity": 0,
+            "is_from_usercf": 0, "is_from_w2v": 0,
+            "is_from_popularity": 0,
             "repurchase_rank": 999, "itemcf_rank": 999,
-            "usercf_rank": 999, "popularity_rank": 999,
+            "usercf_rank": 999, "w2v_rank": 999,
+            "popularity_rank": 999,
         }
 
     def _build_user_source_info(
@@ -168,6 +183,7 @@ class RecallManager:
         repurchase_recs: Dict[str, List],
         itemcf_recs: Dict[str, List],
         usercf_recs: Dict[str, List],
+        w2v_recs: Dict[str, List],
     ) -> Dict:
         """构造单用户的 item -> source_info 映射。"""
         user_source_info = {}
@@ -192,6 +208,13 @@ class RecallManager:
                 user_source_info[item] = self._init_source_entry(item)
             user_source_info[item]["is_from_usercf"] = 1
             user_source_info[item]["usercf_rank"] = rank
+
+        # Word2Vec
+        for rank, item in enumerate(w2v_recs.get(user_id, []), start=1):
+            if item not in user_source_info:
+                user_source_info[item] = self._init_source_entry(item)
+            user_source_info[item]["is_from_w2v"] = 1
+            user_source_info[item]["w2v_rank"] = rank
 
         # 热门
         for rank, item in enumerate(popularity_recs.get(user_id, []), start=1):
@@ -224,97 +247,48 @@ class RecallManager:
 
     def _merge_recall_results(
         self,
-        popularity_recs: Dict[str, List],
-        repurchase_recs: Dict[str, List],
-        itemcf_recs: Dict[str, List],
-        usercf_recs: Dict[str, List],
+        popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs,
     ) -> Dict[str, List]:
         final_recs = {}
         for user_id in tqdm(self.val_users, desc="融合召回结果", unit="用户"):
-            user_source_info = self._build_user_source_info(
-                user_id, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs
-            )
-            final_recs[user_id] = self._rank_candidates_by_fusion(user_source_info)
+            u = self._build_user_source_info(user_id, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs)
+            final_recs[user_id] = self._rank_candidates_by_fusion(u)
         return final_recs
 
     def _merge_recall_results_with_source(
-        self,
-        popularity_recs: Dict[str, List],
-        repurchase_recs: Dict[str, List],
-        itemcf_recs: Dict[str, List],
-        usercf_recs: Dict[str, List],
+        self, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs,
     ) -> Tuple[Dict[str, List], Dict[str, Dict]]:
-        final_recs = {}
-        source_info = {}
+        final_recs, source_info = {}, {}
         for user_id in tqdm(self.val_users, desc="融合召回结果", unit="用户"):
-            user_source_info = self._build_user_source_info(
-                user_id, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs
-            )
-            ranked_items = self._rank_candidates_by_fusion(user_source_info)
-            final_recs[user_id] = ranked_items
-            source_info[user_id] = {item: user_source_info[item] for item in ranked_items}
+            u = self._build_user_source_info(user_id, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs)
+            ranked = self._rank_candidates_by_fusion(u)
+            final_recs[user_id] = ranked
+            source_info[user_id] = {item: u[item] for item in ranked}
         return final_recs, source_info
 
-    def _build_all_user_source_info(
-        self,
-        popularity_recs: Dict[str, List],
-        repurchase_recs: Dict[str, List],
-        itemcf_recs: Dict[str, List],
-        usercf_recs: Dict[str, List],
-    ) -> Dict[str, Dict]:
+    def _build_all_user_source_info(self, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs):
         all_info = {}
-        for user_id in tqdm(self.val_users, desc="构建来源信息", unit="用户"):
-            all_info[user_id] = self._build_user_source_info(
-                user_id, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs
-            )
+        for uid in tqdm(self.val_users, desc="构建来源信息", unit="用户"):
+            all_info[uid] = self._build_user_source_info(uid, popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs)
         return all_info
 
-    def _rerank_with_weights(
-        self,
-        all_user_source_info: Dict[str, Dict],
-        *,
-        repurchase_weight: float | None = None,
-        itemcf_weight: float | None = None,
-        usercf_weight: float | None = None,
-        popularity_weight: float | None = None,
-        repurchase_rank_weight: float | None = None,
-        itemcf_rank_weight: float | None = None,
-        usercf_rank_weight: float | None = None,
-        popularity_rank_weight: float | None = None,
-    ) -> Dict[str, List]:
+    def _rerank_with_weights(self, all_user_source_info, **kw):
         old = {
-            "repurchase_weight": self.repurchase_weight,
-            "itemcf_weight": self.itemcf_weight,
-            "usercf_weight": self.usercf_weight,
+            "repurchase_weight": self.repurchase_weight, "itemcf_weight": self.itemcf_weight,
+            "usercf_weight": self.usercf_weight, "w2v_weight": self.w2v_weight,
             "popularity_weight": self.popularity_weight,
             "repurchase_rank_weight": self.repurchase_rank_weight,
             "itemcf_rank_weight": self.itemcf_rank_weight,
             "usercf_rank_weight": self.usercf_rank_weight,
+            "w2v_rank_weight": self.w2v_rank_weight,
             "popularity_rank_weight": self.popularity_rank_weight,
         }
-        if repurchase_weight is not None: self.repurchase_weight = repurchase_weight
-        if itemcf_weight is not None: self.itemcf_weight = itemcf_weight
-        if usercf_weight is not None: self.usercf_weight = usercf_weight
-        if popularity_weight is not None: self.popularity_weight = popularity_weight
-        if repurchase_rank_weight is not None: self.repurchase_rank_weight = repurchase_rank_weight
-        if itemcf_rank_weight is not None: self.itemcf_rank_weight = itemcf_rank_weight
-        if usercf_rank_weight is not None: self.usercf_rank_weight = usercf_rank_weight
-        if popularity_rank_weight is not None:
-            self.repurchase_rank_weight = repurchase_rank_weight
-        if itemcf_rank_weight is not None:
-            self.itemcf_rank_weight = itemcf_rank_weight
-        if popularity_rank_weight is not None:
-            self.popularity_rank_weight = popularity_rank_weight
-
-        # 重排
+        for k, v in kw.items():
+            if hasattr(self, k): setattr(self, k, v)
         final_recs = {}
-        for user_id in tqdm(self.val_users, desc="换权重重排", unit="用户"):
-            final_recs[user_id] = self._rank_candidates_by_fusion(all_user_source_info[user_id])
-
-        # 恢复旧权重
-        for k, v in old.items():
-            setattr(self, k, v)
-
+        for uid in tqdm(self.val_users, desc="换权重重排", unit="用户"):
+            final_recs[uid] = self._rank_candidates_by_fusion(all_user_source_info[uid])
+        for k, v in old.items(): setattr(self, k, v)
         return final_recs
 
     def grid_search_weights(
@@ -338,11 +312,12 @@ class RecallManager:
         repurchase_recs = self.repurchase_recaller.recall_with_ranks(self.val_users)
         itemcf_recs = self.itemcf_recaller.recall_with_ranks(self.val_users)
         usercf_recs = self.usercf_recaller.recall_with_ranks(self.val_users)
+        w2v_recs = self.w2v_recaller.recall_with_ranks(self.val_users)
 
         # Step 2: 构建 source_info（一次，最重的一步）
         print("\n📦 构建来源信息（一次，供后续复用）...", flush=True)
         all_user_source_info = self._build_all_user_source_info(
-            popularity_recs, repurchase_recs, itemcf_recs, usercf_recs
+            popularity_recs, repurchase_recs, itemcf_recs, usercf_recs, w2v_recs
         )
 
         # Step 3: 对每个权重组合重新排序 + 评估
@@ -464,6 +439,89 @@ class UserCFRecall:
 
             top = [item for item, _ in item_scores.most_common(self.top_k)]
             recs[user_id] = top
+        return recs
+
+    def recall(self, val_users: List[str]) -> Dict[str, List]:
+        return self._recall_internal(val_users)
+
+    def recall_with_ranks(self, val_users: List[str]) -> Dict[str, List]:
+        return self._recall_internal(val_users)
+
+
+class Word2VecRecall:
+    """Word2Vec 商品 embedding 召回。
+
+    将用户购买序列视为"句子"，商品视为"词"，
+    训练 Word2Vec 得到商品 embedding，用余弦相似度找相似商品。
+    与 ItemCF 互补：ItemCF 基于共现，Word2Vec 基于序列上下文。
+    """
+
+    def __init__(self, train_trans: pd.DataFrame, top_k: int = 20, vector_size: int = 64):
+        self.train_trans = train_trans.copy()
+        self.train_trans["customer_id"] = self.train_trans["customer_id"].astype(str)
+        self.top_k = top_k
+        self.vector_size = vector_size
+        self.similar_items = {}  # item_id -> [(similar_item, score), ...]
+        self._train_embeddings()
+
+    def _train_embeddings(self):
+        """训练 Word2Vec 并预计算每个商品的 top-K 相似商品。"""
+        print("训练 Word2Vec embedding...", flush=True)
+
+        # 构造用户购买序列（按时间排序，每个用户一个"句子"）
+        sorted_trans = self.train_trans.sort_values("t_dat")
+        sentences = (
+            sorted_trans.groupby("customer_id")["article_id"]
+            .agg(lambda x: [str(i) for i in x])
+            .tolist()
+        )
+        print(f"  {len(sentences)} 个用户序列, 共 {sum(len(s) for s in sentences):,} 个购买", flush=True)
+
+        try:
+            from gensim.models import Word2Vec
+            model = Word2Vec(
+                sentences=sentences,
+                vector_size=self.vector_size,
+                window=10,
+                min_count=2,
+                workers=4,
+                epochs=5,
+                sg=1,  # skip-gram
+                seed=42,
+            )
+            # 预计算每个商品的 top-K 相似商品
+            all_items = set()
+            for seq in sentences:
+                all_items.update(seq)
+            for item in tqdm(all_items, desc="计算 W2V 相似商品", unit="商品"):
+                try:
+                    sims = model.wv.most_similar(item, topn=self.top_k)
+                    self.similar_items[int(item)] = [(int(s[0]), s[1]) for s in sims]
+                except KeyError:
+                    self.similar_items[int(item)] = []
+            print(f"  Word2Vec 就绪: {len(self.similar_items)} 个商品有 embedding")
+        except ImportError:
+            print("  ⚠️ gensim 未安装，Word2Vec 召回返回空")
+            self.similar_items = {}
+
+    def _recall_internal(self, val_users: List[str]) -> Dict[str, List]:
+        """对每个用户，聚合其购买商品的相似商品。"""
+        recs = {}
+        user_items = (
+            self.train_trans[self.train_trans["customer_id"].isin(val_users)]
+            .groupby("customer_id")["article_id"]
+            .agg(set).to_dict()
+        )
+
+        for user_id in tqdm(val_users, desc="Word2Vec召回", unit="用户"):
+            my_items = user_items.get(user_id, set())
+            scored = {}
+            for item in my_items:
+                for sim_item, score in self.similar_items.get(item, []):
+                    if sim_item not in my_items:
+                        scored[sim_item] = scored.get(sim_item, 0) + score
+            ranked = sorted(scored.items(), key=lambda x: -x[1])
+            recs[user_id] = [item for item, _ in ranked[:self.top_k]]
         return recs
 
     def recall(self, val_users: List[str]) -> Dict[str, List]:
