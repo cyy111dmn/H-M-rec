@@ -40,6 +40,7 @@ NUM_FEATURES = [
     "user_price_p50", "user_price_p10", "user_price_p90",
     "user_activity_log",
     "is_new_repurchase",
+    "user_recency_days", "user_monetary", "user_avg_basket",
     "age",
 ]
 

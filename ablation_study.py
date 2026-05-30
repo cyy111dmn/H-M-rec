@@ -63,6 +63,7 @@ ALL_FEATURE_COLS = [
     "user_price_p50", "user_price_p10", "user_price_p90",
     "user_activity_log", "user_activity_bucket",
     "is_new_repurchase",
+    "user_recency_days", "user_monetary", "user_avg_basket",
     "age", "club_member_status", "fashion_news_frequency",
     "product_group_name", "index_group_name", "colour_group_name", "graphical_appearance_name"
 ]
@@ -74,7 +75,7 @@ CAT_FEATURE_COLS = [
     "user_activity_bucket",
 ]
 
-PRICE_FEATURES = ["item_price", "user_avg_price", "price_diff"]
+PRICE_FEATURES = ["item_price", "user_avg_price", "price_diff", "user_monetary", "user_avg_basket"]
 PREFERENCE_MATCH_FEATURES = ["is_category_matched", "is_color_matched"]
 
 
