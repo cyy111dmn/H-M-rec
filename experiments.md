@@ -25,6 +25,7 @@
 | 2026-05-29 | f428276 | 添加 experiments.md 实验记录文件 | — | — | — | 工程化 |
 | 2026-05-29 | 8ef77a5 | 添加 main.py --use_ranker（LGBM 精排全量推理）；跑 DeepFM 训练 | 0.012867 (DeepFM) ❌ | — | — | DeepFM MAP 低于纯召回，需调参 |
 | 2026-05-30 | c53332d | main.py 分批预测 + 预计算特征 + LGBM 全量跑批 | — | ✅ | **0.008** ❌ | LGBM 精排全量导致 MAP 大跌，训练标签穿越过拟合。回退纯召回 |
+| 2026-05-30 | 6cd85bc | **RFM 特征**：user_recency_days、user_monetary、user_avg_basket | **0.019090** (LGBM) 🔥 | — | — | RFM 特征有效，LGBM 精排从 0.017719 提升至 0.019090 |
 
 ## 网格搜索明细
 
