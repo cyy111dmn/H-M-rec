@@ -135,11 +135,16 @@ def _build_source_for(recs, source_info, user_ids):
     return str_src
 
 
-def _build_ranking_candidates_with_labels(recs, source_info, customers, label_set, sample_users=100000):
+def _build_ranking_candidates_with_labels(recs, source_info, customers, label_set, user_list=None, sample_users=None):
     """从召回结果构建带时间切分标签的训练集。"""
     print("📋 构建排序候选集（带时间切分标签）...", flush=True)
-    all_users = customers['customer_id'].unique()
-    all_users = np.random.RandomState(42).choice(all_users, min(sample_users, len(all_users)), replace=False)
+    if user_list is not None:
+        all_users = user_list
+    elif sample_users is not None:
+        all_users = customers['customer_id'].unique()
+        all_users = np.random.RandomState(42).choice(all_users, min(sample_users, len(all_users)), replace=False)
+    else:
+        all_users = customers['customer_id'].unique()
     str_source_info = _build_source_for(recs, source_info, all_users)
     samples = []
     for uid in all_users:
@@ -262,6 +267,7 @@ if __name__ == "__main__":
             label_trans['customer_id'].astype(str),
             label_trans['article_id'].astype(str)
         ))
+        label_user_set = set(label_trans['customer_id'].astype(str).unique())
         del label_trans
         gc.collect()
 
@@ -274,16 +280,29 @@ if __name__ == "__main__":
         )
         train_recs, train_source = mgr.multi_recall_with_source_info()
         print_memory_usage("召回完成")
-        del mgr, train_trans
+        del mgr
         gc.collect()
 
-        # 采样 10 万用户构建训练集（标签来自标签期）
-        TRAIN_SAMPLE = 100000
-        print(f"\n🎯 采样 {TRAIN_SAMPLE:,} 用户训练 LGBM...")
+        # 构建训练集：选有标签购买的用户 + 随机用户，凑够 30 万
+        TRAIN_TARGET = 300000
+        np.random.seed(42)
+        all_user_ids = customers['customer_id'].unique()
+        # 优先选有标签的用户，不足再随机补
+        chosen = list(label_user_set & set(str(u) for u in all_user_ids))
+        remaining = TRAIN_TARGET - len(chosen)
+        if remaining > 0:
+            extras = [str(u) for u in all_user_ids if str(u) not in label_user_set]
+            chosen.extend(str(u) for u in np.random.choice(extras, min(remaining, len(extras)), replace=False))
+        chosen = chosen[:TRAIN_TARGET]
+
+        print(f"\n🎯 训练用户: {len(chosen):,}（含标签用户: {len(label_user_set & set(chosen)):,}）")
         train_df = _build_ranking_candidates_with_labels(
-            train_recs, train_source, customers, label_set, sample_users=TRAIN_SAMPLE
+            train_recs, train_source, customers, label_set, user_list=chosen
         )
-        train_df = extract_advanced_features_for_twostage(train_df, transactions, customers, articles)
+        # 用训练期数据提取特征（避免标签期数据泄漏）
+        train_df = extract_advanced_features_for_twostage(train_df, train_trans, customers, articles)
+        del train_trans
+        gc.collect()
         print(f"训练样本: {len(train_df):,} 行, 正样本: {train_df['purchased'].sum():,}", flush=True)
         print_memory_usage("训练数据准备完成")
 
@@ -317,7 +336,7 @@ if __name__ == "__main__":
         del train_df
         gc.collect()
 
-        # 全量推理（用完整 transactions 做特征）
+        # 全量推理（用完整 transactions 做特征——推理时可用所有数据）
         print("\n🔮 LGBM 全量推理...")
         lookups = precompute_feature_lookups(transactions, articles)
         all_users = customers['customer_id'].unique()
